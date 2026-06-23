@@ -5,7 +5,7 @@
 #include <assert.h>
 #include "multiset.h"
 
-// ===== Создание мультимножества =====
+
 multiset_t* multiset_create(void) {
     multiset_t* ms = malloc(sizeof(multiset_t));
     if (ms == NULL) return NULL;
@@ -19,14 +19,14 @@ multiset_t* multiset_create(void) {
     return ms;
 }
 
-// ===== Освобождение памяти =====
+
 void multiset_free(multiset_t* ms) {
     if (ms == NULL) return;
     hash_map_free(ms->map);
     free(ms);
 }
 
-// ===== Добавление элемента =====
+
 bool multiset_add(multiset_t* ms, const char* element, int count) {
     assert(ms != NULL);
     assert(element != NULL);
@@ -41,7 +41,7 @@ bool multiset_add(multiset_t* ms, const char* element, int count) {
     return true;
 }
 
-// ===== Удаление элемента =====
+
 bool multiset_remove(multiset_t* ms, const char* element, int count) {
     assert(ms != NULL);
     assert(element != NULL);
@@ -62,7 +62,7 @@ bool multiset_remove(multiset_t* ms, const char* element, int count) {
     }
 }
 
-// ===== Получение количества =====
+
 int multiset_count(multiset_t* ms, const char* element) {
     assert(ms != NULL);
     assert(element != NULL);
@@ -74,14 +74,14 @@ int multiset_count(multiset_t* ms, const char* element) {
     return (int)hash_map_get(ms->map, element);
 }
 
-// ===== Проверка наличия =====
+
 bool multiset_contains(multiset_t* ms, const char* element) {
     assert(ms != NULL);
     assert(element != NULL);
     return hash_map_contains(ms->map, element);
 }
 
-// ===== Размер =====
+
 size_t multiset_size(multiset_t* ms) {
     assert(ms != NULL);
     return hash_map_size(ms->map);
@@ -92,7 +92,7 @@ bool multiset_is_empty(multiset_t* ms) {
     return hash_map_is_empty(ms->map);
 }
 
-// ===== Вывод =====
+
 void multiset_print(multiset_t* ms) {
     assert(ms != NULL);
 

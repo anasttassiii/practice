@@ -19,7 +19,7 @@ set_t* set_create(void) {
     return set;
 }
 
-// ===== Освобождение памяти =====
+
 void set_free(set_t* set) {
     if (set == NULL) return;
     hash_map_free(set->map);
@@ -39,7 +39,6 @@ bool set_insert(set_t* set, const char* element) {
     return true;
 }
 
-// ===== Проверка наличия элемента =====
 bool set_contains(set_t* set, const char* element) {
     assert(set != NULL);
     assert(element != NULL);
@@ -53,7 +52,7 @@ bool set_remove(set_t* set, const char* element) {
     return hash_map_remove(set->map, element);
 }
 
-// ===== Размер множества =====
+
 size_t set_size(set_t* set) {
     assert(set != NULL);
     return hash_map_size(set->map);
@@ -200,7 +199,7 @@ bool set_is_disjoint(set_t* a, set_t* b) {
     return true;
 }
 
-// ===== Вывод множества =====
+
 void set_print(set_t* set) {
     assert(set != NULL);
 

@@ -10,7 +10,7 @@ typedef struct _set_t {
     hash_map_t* map;
 } set_t;
 
-// ===== Создание/удаление =====
+
 set_t* set_create(void);
 void set_free(set_t* set);
 
@@ -30,7 +30,7 @@ bool set_is_subset(set_t* a, set_t* b);
 bool set_is_equal(set_t* a, set_t* b);
 bool set_is_disjoint(set_t* a, set_t* b);
 
-// ===== Вывод =====
+
 void set_print(set_t* set);
 char** set_to_array(set_t* set, size_t* count);
 

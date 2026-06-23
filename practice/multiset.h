@@ -10,7 +10,7 @@ typedef struct _multiset_t {
     hash_map_t* map;
 } multiset_t;
 
-// ===== Создание/удаление =====
+
 multiset_t* multiset_create(void);
 void multiset_free(multiset_t* ms);
 
@@ -22,7 +22,7 @@ bool multiset_contains(multiset_t* ms, const char* element);
 size_t multiset_size(multiset_t* ms);
 bool multiset_is_empty(multiset_t* ms);
 
-// ===== Вывод =====
+
 void multiset_print(multiset_t* ms);
 
 #endif /* MULTISET_H */

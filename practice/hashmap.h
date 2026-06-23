@@ -7,7 +7,7 @@
 // ===== Структура хеш-таблицы =====
 typedef struct _hash_map_t hash_map_t;
 
-// ===== Создание/удаление =====
+
 hash_map_t* hash_map_create(size_t size);
 void hash_map_free(hash_map_t* map);
 
