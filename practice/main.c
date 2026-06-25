@@ -246,6 +246,8 @@ void test_multithreaded(void) {
 
 
 int main(void) {
+
+
     printf("============================================\n");
     printf("     LOCK-FREE HASH MAP TEST\n");
     printf("============================================\n");
