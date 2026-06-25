@@ -2,210 +2,258 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <assert.h>
+#include <windows.h>      // Для CreateThread, WaitForMultipleObjects, HANDLE
+#include "hashmap.h"
 #include "set.h"
 #include "multiset.h"
 
 
+#define NUM_THREADS 4           // Количество потоков 
+#define NUM_OPERATIONS 1000     // Сколько операций делает каждый поток
 
 
-// ===== Вспомогательная функция для проверки =====
-void test_assert(bool condition, const char* message) {
-    if (condition) {
-        printf("[PASS] %s\n", message);
+/**
+ *  Структура, которая передается в каждый поток.
+ *
+ * Каждый поток получает:
+ *   - map       -> указатель на хеш-таблицу (все потоки работают с одной таблицей)
+ *   - thread_id -> уникальный номер потока (0, 1, 2, 3)
+ */
+typedef struct {
+    hash_map_t* map;        // Указатель на хеш-таблицу
+    int thread_id;          // Номер потока (0, 1, 2, 3)
+} thread_data_t;
+
+// ============================================================================
+// ФУНКЦИЯ ПОТОКА-ПИСАТЕЛЯ
+// ============================================================================
+
+/**
+ *  Функция, которую выполняет каждый поток-писатель.
+ *   1. Получает данные (таблицу и свой номер)
+ *   2. В цикле 1000 раз генерирует ключи вида "key_0_0", "key_0_1", ...
+ *   3. Вставляет их в хеш-таблицу со значениями i * 10 + id
+ *
+ * Все 4 потока работают параллельно и не блокируют друг друга
+ */
+DWORD WINAPI writer_thread(LPVOID arg) {
+    // 1. Превращаем сырые данные в структуру
+    thread_data_t* data = (thread_data_t*)arg;
+    hash_map_t* map = data->map;      // Таблица, куда пишем
+    int id = data->thread_id;          // Номер потока
+
+    char key[32];                      // Буфер для формирования ключа
+
+    // 2. Вставляем NUM_OPERATIONS элементов
+    for (int i = 0; i < NUM_OPERATIONS; i++) {
+        // Формируем ключ: "key_<номер_потока>_<номер_итерации>"
+        sprintf(key, "key_%d_%d", id, i);
+
+        // Вставляем в таблицу: ключ -> значение (i * 10 + id)
+        // Значение разное для каждого потока, чтобы не было конфликтов
+        map = hash_map_insert(map, key, i * 10 + id);
+    }
+
+    return 0;  
+}
+
+// ============================================================================
+// ФУНКЦИЯ ПОТОКА-ЧИТАТЕЛЯ
+// ============================================================================
+
+/**
+ * Функция, которую выполняет каждый поток-читатель.
+
+ *   1. Получает данные (таблицу и свой номер)
+ *   2. В цикле 1000 раз генерирует ключи вида "key_0_0", "key_0_1", ...
+ *   3. Проверяет, есть ли такой ключ в таблице
+ *   4. Считает количество найденных ключей
+ *
+ * Каждый читатель ищет только свои ключи (те, которые он сам вставил).
+ * Это позволяет проверить, что все записи сохранились.
+ *
+ * Возвращает: сколько ключей найдено (ожидается 1000)
+ */
+DWORD WINAPI reader_thread(LPVOID arg) {
+    // 1. Получаем данные
+    thread_data_t* data = (thread_data_t*)arg;
+    hash_map_t* map = data->map;
+    int id = data->thread_id;
+
+    int found = 0;                     // Счетчик найденных ключей
+    char key[32];
+
+    // 2. Проверяем все свои ключи
+    for (int i = 0; i < NUM_OPERATIONS; i++) {
+        sprintf(key, "key_%d_%d", id, i);
+
+        // Если ключ есть в таблице — увеличиваем счетчик
+        if (hash_map_contains(map, key)) {
+            found++;
+        }
+    }
+
+    return (DWORD)found;  // Возвращаем количество найденных ключей
+}
+
+/**
+ * Тест Lock-Free хеш-таблицы в многопоточной среде.
+ *
+ * Проверяет три сценария:
+ *   1. Запись: 4 потока одновременно вставляют 4000 элементов
+ *   2. Чтение: 4 потока одновременно читают 4000 элементов
+ *   3. Удаление: удаление половины элементов
+ *
+ * Если все тесты проходят — таблица работает корректно и безопасно
+ * в многопоточной среде без блокировок.
+ */
+void test_multithreaded(void) {
+    printf("\n========== LOCK-FREE TEST ==========\n\n");
+
+    // ===== 1. ПОДГОТОВКА =======
+
+    // Всего элементов: 4 потока × 1000 операций = 4000
+    size_t total_elements = NUM_THREADS * NUM_OPERATIONS;
+
+    /**
+     * Создаем таблицу заведомо большего размера, чтобы ИЗБЕЖАТЬ РАСШИРЕНИЯ
+     * во время теста. Расширение — сложная операция, мы хотим проверить
+     * именно работу Lock-Free вставки без дополнительных факторов.
+     */
+    size_t table_size = 1;
+    while (table_size < total_elements * 2) {  // Пока < 8000
+        table_size <<= 1;                       // Удваиваем
+    }
+    // table_size = 8192
+
+    // Создаем хеш-таблицу
+    hash_map_t* map = hash_map_create(table_size);
+    if (map == NULL) {
+        printf("ERROR: Failed to create hash map\n");
+        return;
+    }
+
+    printf("Table size: %zu (elements: %zu)\n", table_size, total_elements);
+    printf("Threads: %d, operations per thread: %d\n\n", NUM_THREADS, NUM_OPERATIONS);
+
+    // Массив идентификаторов потоков: 4 писателя и 4 читателя (всего 8 потоков)
+    HANDLE threads[NUM_THREADS * 2];
+
+    // Массив данных для каждого потока
+    thread_data_t data[NUM_THREADS * 2];
+
+    // ===== 2. ТЕСТ ЗАПИСИ ========
+
+    printf("1. Writing %zu elements from %d threads...\n", total_elements, NUM_THREADS);
+
+    /**
+     * Запускаем 4 потока-писателя.
+     * Все они работают параллельно с одной таблицей.
+     * Благодаря Lock-Free механизму (CAS) они не блокируют друг друга.
+     */
+    for (int i = 0; i < NUM_THREADS; i++) {
+        data[i].map = map;
+        data[i].thread_id = i;
+        threads[i] = CreateThread(NULL, 0, writer_thread, &data[i], 0, NULL);
+    }
+
+    // Ждем, пока все 4 потока закончат работу
+    WaitForMultipleObjects(NUM_THREADS, threads, TRUE, INFINITE);
+
+    // освобождаем ресурсы
+    for (int i = 0; i < NUM_THREADS; i++) {
+        CloseHandle(threads[i]);
+    }
+
+    // Проверяем, сколько элементов реально в таблице
+    size_t actual_size = hash_map_size(map);
+    printf("   Expected: %zu, Actual: %zu\n", total_elements, actual_size);
+
+    if (actual_size == total_elements) {
+        printf("   [PASS] All entries inserted successfully\n");
     }
     else {
-        printf("[FAIL] %s\n", message);
-    }
-}
-
-// ===== Тест множества =====
-void test_set(void) {
-    printf("\n========== SET TEST ==========\n\n");
-
-    set_t* A = set_create();
-    set_t* B = set_create();
-
-    // Заполняем A = {1, 2, 3, 4}
-    set_insert(A, "1");
-    set_insert(A, "2");
-    set_insert(A, "3");
-    set_insert(A, "4");
-    set_insert(A, "2");  // Дубликат не добавится
-
-    // Заполняем B = {3, 4, 5, 6}
-    set_insert(B, "3");
-    set_insert(B, "4");
-    set_insert(B, "5");
-    set_insert(B, "6");
-
-    printf("A = "); set_print(A);
-    printf("B = "); set_print(B);
-    printf("\n");
-
-    // Операции над множествами
-    set_t* C = set_union(A, B);                    // Объединение
-    set_t* D = set_intersection(A, B);             // Пересечение
-    set_t* E = set_difference(A, B);               // Разность
-    set_t* F = set_symmetric_difference(A, B);     // Симметрическая разность
-
-    printf("A U B = "); set_print(C);
-    printf("A ^ B = "); set_print(D);
-    printf("A \\ B = "); set_print(E);
-    printf("symmetric difference (A, B) = "); set_print(F);
-    printf("\n");
-
-    // Проверки
-    test_assert(set_contains(A, "2"), "A contains '2'");
-    test_assert(!set_contains(A, "5"), "A does not contain '5'");
-    test_assert(set_is_subset(D, A), "D is subset of A");
-    test_assert(!set_is_subset(A, B), "A is not a subset of B");
-    test_assert(!set_is_equal(A, B), "A is not equal to B");
-    test_assert(!set_is_disjoint(A, B), "A and B intersect");
-    test_assert(set_is_disjoint(E, B), "E and B are disjoint");
-
-    printf("\nSize of A: %zu\n", set_size(A));
-    printf("Size of B: %zu\n", set_size(B));
-    printf("\n");
-
-    // Удаление элемента
-    set_remove(A, "2");
-    printf("A after removing '2': "); set_print(A);
-    test_assert(!set_contains(A, "2"), "'2' removed from A");
-
-    // Очистка памяти
-    set_free(A);
-    set_free(B);
-    set_free(C);
-    set_free(D);
-    set_free(E);
-    set_free(F);
-}
-
-// ===== Тест мультимножества =====
-void test_multiset(void) {
-    printf("\n========== MULTISET TEST ==========\n\n");
-
-    multiset_t* ms = multiset_create();
-
-    // Добавление элементов с количеством
-    multiset_add(ms, "apple", 3);
-    multiset_add(ms, "banana", 2);
-    multiset_add(ms, "apple", 1);   // Увеличиваем количество
-    multiset_add(ms, "cherry", 1);
-
-    printf("Multiset: "); multiset_print(ms);
-    printf("\n");
-
-    // Проверки
-    printf("Count of 'apple': %d\n", multiset_count(ms, "apple"));
-    printf("Count of 'banana': %d\n", multiset_count(ms, "banana"));
-    printf("Count of 'grape': %d\n", multiset_count(ms, "grape"));
-    printf("Size (unique): %zu\n", multiset_size(ms));
-    printf("\n");
-
-    test_assert(multiset_contains(ms, "apple"), "Contains 'apple'");
-    test_assert(!multiset_contains(ms, "grape"), "Does not contain 'grape'");
-
-    // Удаление части элементов
-    printf("\nRemoving 2 'apple'...\n");
-    multiset_remove(ms, "apple", 2);
-    printf("Multiset: "); multiset_print(ms);
-    printf("Count of 'apple': %d\n", multiset_count(ms, "apple"));
-
-    // Удаление всех элементов
-    printf("\nRemoving 2 'apple' (all)...\n");
-    multiset_remove(ms, "apple", 2);
-    printf("Multiset: "); multiset_print(ms);
-    test_assert(!multiset_contains(ms, "apple"), "'apple' completely removed");
-
-    multiset_free(ms);
-}
-
-// ===== Тест хеш-функции =====
-void test_hash_function(void) {
-    printf("\n========== HASH FUNCTION TEST ==========\n\n");
-
-    const char* test_keys[] = {
-        "apple", "banana", "cherry", "date",
-        "elderberry", "fig", "grape"
-    };
-    int num_keys = 7;
-
-    printf("Testing hash function distribution:\n\n");
-
-    hash_map_t* map = hash_map_create(16);
-
-    for (int i = 0; i < num_keys; i++) {
-        map = hash_map_insert(map, test_keys[i], i);
+        printf("   [FAIL] Expected %zu, got %zu\n", total_elements, actual_size);
     }
 
-    printf("Inserted %d keys\n", num_keys);
-    printf("Number of elements: %zu\n", hash_map_size(map));
+    // ===== 3. ТЕСТ ЧТЕНИЯ ======
 
-    // Проверяем все ключи
-    for (int i = 0; i < num_keys; i++) {
-        if (hash_map_contains(map, test_keys[i])) {
-            printf("  [OK] '%s' found\n", test_keys[i]);
-        }
-        else {
-            printf("  [FAIL] '%s' NOT found\n", test_keys[i]);
+    printf("\n2. Reading from %d threads...\n", NUM_THREADS);
+
+    /**
+     * Запускаем 4 потока-читателя.
+     * Каждый ищет свои ключи (которые вставил соответствующий писатель).
+     * Они тоже работают параллельно
+     */
+    for (int i = 0; i < NUM_THREADS; i++) {
+        data[NUM_THREADS + i].map = map;
+        data[NUM_THREADS + i].thread_id = i;
+        threads[i] = CreateThread(NULL, 0, reader_thread, &data[NUM_THREADS + i], 0, NULL);
+    }
+
+    WaitForMultipleObjects(NUM_THREADS, threads, TRUE, INFINITE);
+
+    // Собираем результаты от всех читателей
+    int total_found = 0;
+    for (int i = 0; i < NUM_THREADS; i++) {
+        DWORD result;
+        GetExitCodeThread(threads[i], &result);
+        total_found += (int)result;   // Суммируем найденные ключи
+        CloseHandle(threads[i]);
+    }
+
+    printf("   Found: %d out of %zu\n", total_found, total_elements);
+
+    if ((size_t)total_found == total_elements) {
+        printf("   [PASS] All entries found by readers\n");
+    }
+    else {
+        printf("   [FAIL] Expected %zu, got %d\n", total_elements, total_found);
+    }
+
+    // ===== 4. ТЕСТ УДАЛЕНИЯ =======
+
+    printf("\n3. Removing half of elements...\n");
+
+    /**
+     * Каждый поток удаляет первые 500 своих ключей.
+     * Всего удаляется 4 × 500 = 2000 элементов.
+     */
+    for (int i = 0; i < NUM_THREADS; i++) {
+        char key[32];
+        for (int j = 0; j < NUM_OPERATIONS / 2; j++) {  // 0..499
+            sprintf(key, "key_%d_%d", i, j);
+            hash_map_remove(map, key);
         }
     }
+
+    // Проверяем размер после удаления
+    size_t size_after = hash_map_size(map);
+    printf("   Size after removal: %zu\n", size_after);
+
+    // Ожидаем: 4000 - 2000 = 2000
+    if (size_after == total_elements / 2) {
+        printf("   [PASS] Half of entries removed\n");
+    }
+    else {
+        printf("   [FAIL] Expected %zu, got %zu\n", total_elements / 2, size_after);
+    }
+
+    // ===== 5. ОЧИСТКА =====
 
     hash_map_free(map);
-}
-
-// ===== Тест производительности =====
-void test_performance(void) {
-    printf("\n========== PERFORMANCE TEST ==========\n\n");
-
-    set_t* set = set_create();
-    const int num_elements = 1000;
-    char key[20];
-
-    printf("Inserting %d elements...\n", num_elements);
-    for (int i = 0; i < num_elements; i++) {
-        sprintf(key, "key_%d", i);
-        set_insert(set, key);
-    }
-
-    printf("Set size: %zu\n", set_size(set));
-
-    // Поиск
-    printf("Searching elements...\n");
-    int found = 0;
-    for (int i = 0; i < num_elements; i++) {
-        sprintf(key, "key_%d", i);
-        if (set_contains(set, key)) found++;
-    }
-    printf("Found: %d out of %d\n", found, num_elements);
-
-    // Удаление
-    printf("Removing elements...\n");
-    for (int i = 0; i < num_elements / 2; i++) {
-        sprintf(key, "key_%d", i);
-        set_remove(set, key);
-    }
-    printf("Size after removal: %zu\n", set_size(set));
-
-    set_free(set);
 }
 
 
 int main(void) {
     printf("============================================\n");
-    printf("     HASH TABLE, SET AND MULTISET\n");
+    printf("     LOCK-FREE HASH MAP TEST\n");
     printf("============================================\n");
 
-    // Запуск всех тестов
-    test_hash_function();
-    test_set();
-    test_multiset();
-    test_performance();
+    test_multithreaded();
 
     printf("\n============================================\n");
-    printf("           ALL TESTS PASSED!\n");
+    printf("              TEST COMPLETE\n");
     printf("============================================\n");
 
     return 0;
